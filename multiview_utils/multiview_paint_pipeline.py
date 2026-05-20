@@ -5,6 +5,10 @@ import torch
 import trimesh
 import numpy as np
 from PIL import Image
+from unittest.mock import MagicMock
+
+# Mock Blender (bpy) module globally to prevent ModuleNotFoundError on Kaggle/servers
+sys.modules['bpy'] = MagicMock()
 
 # Bind hy3dpaint path to Python path
 hy3dpaint_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Hunyuan3D-2.1", "hy3dpaint"))
@@ -14,8 +18,35 @@ if hy3dpaint_path not in sys.path:
 from textureGenPipeline import Hunyuan3DPaintPipeline, Hunyuan3DPaintConfig
 from utils.uvwrap_utils import mesh_uv_wrap
 from utils.simplify_mesh_utils import remesh_mesh
-from DifferentiableRenderer.mesh_utils import convert_obj_to_glb
 from multiview_utils.image_utils import align_multiview_colors
+
+# Robust OBJ to GLB converter that uses bpy if real, and falls back to trimesh
+def robust_convert_obj_to_glb(obj_path, glb_path):
+    is_mock = "bpy" in sys.modules and ("MagicMock" in str(type(sys.modules["bpy"])) or "mock" in str(sys.modules["bpy"]).lower())
+    
+    success = False
+    if not is_mock:
+        try:
+            from DifferentiableRenderer.mesh_utils import convert_obj_to_glb as blender_convert
+            print("[multiview] Attempting Blender-based OBJ to GLB conversion...")
+            success = blender_convert(obj_path, glb_path)
+        except Exception as e:
+            print(f"[multiview] Blender conversion failed: {e}")
+            success = False
+            
+    if not success or not os.path.exists(glb_path):
+        print("[multiview] Blender (bpy) not available or failed. Using Trimesh to convert OBJ to GLB...")
+        try:
+            scene = trimesh.load(obj_path)
+            scene.export(glb_path)
+            success = os.path.exists(glb_path)
+            if success:
+                print(f"[multiview] Trimesh successfully converted OBJ to GLB: {glb_path}")
+        except Exception as e:
+            print(f"[multiview] Trimesh GLB conversion failed: {e}")
+            success = False
+            
+    return success
 
 class MultiViewPaintPipeline(Hunyuan3DPaintPipeline):
     """
@@ -138,7 +169,7 @@ class MultiViewPaintPipeline(Hunyuan3DPaintPipeline):
         
         if save_glb:
             glb_path = output_mesh_path.replace(".obj", ".glb")
-            convert_obj_to_glb(output_mesh_path, glb_path)
+            robust_convert_obj_to_glb(output_mesh_path, glb_path)
             print(f"[SUCCESS] Ultra-fidelity multi-view GLB successfully generated at: {glb_path}")
             return glb_path
             

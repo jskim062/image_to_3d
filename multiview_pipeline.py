@@ -1,5 +1,10 @@
 import os
 import sys
+from unittest.mock import MagicMock
+
+# Mock Blender (bpy) module globally to prevent ModuleNotFoundError on Kaggle/servers
+sys.modules['bpy'] = MagicMock()
+
 import argparse
 import torch
 from PIL import Image
@@ -12,6 +17,15 @@ hy3dpaint_path = os.path.join(workspace_dir, "Hunyuan3D-2.1", "hy3dpaint")
 for path in [hy3dshape_path, hy3dpaint_path]:
     if path not in sys.path:
         sys.path.insert(0, path)
+
+# Prevent namespace package shadowing for custom_rasterizer in Kaggle/Linux environments
+try:
+    import custom_rasterizer
+    if not hasattr(custom_rasterizer, 'rasterize'):
+        import custom_rasterizer.custom_rasterizer as actual_cr
+        sys.modules['custom_rasterizer'] = actual_cr
+except ImportError:
+    pass
 
 from multiview_utils.image_utils import slice_turnaround_sheet
 from multiview_utils.multiview_paint_pipeline import MultiViewPaintPipeline
