@@ -1,0 +1,19 @@
+# Hunyuan3D heavy dependency folder (downloaded dynamically in Kaggle)
+Hunyuan3D-2.1/
+
+# Python caching
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local test outputs and diagnostic generations
+test_output/
+output_multiview/
+output/
+
+# Editor & workspace files
+.claude/
+.idea/
+.vscode/
+.gitattributes
