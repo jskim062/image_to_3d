@@ -9,6 +9,23 @@ sys.modules['bpy'] = MagicMock()
 import torchvision.transforms.functional as _tvf
 sys.modules['torchvision.transforms.functional_tensor'] = _tvf
 
+# Globally silence tqdm progress bars to prevent notebook output flooding (OOM/long scrolls)
+try:
+    import tqdm
+    class SilentTqdm(tqdm.tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs['disable'] = True
+            super().__init__(*args, **kwargs)
+    tqdm.tqdm = SilentTqdm
+    sys.modules['tqdm'].tqdm = SilentTqdm
+    for m_name in list(sys.modules.keys()):
+        if m_name.startswith('tqdm'):
+            m = sys.modules[m_name]
+            if hasattr(m, 'tqdm'):
+                setattr(m, 'tqdm', SilentTqdm)
+except Exception:
+    pass
+
 import argparse
 import torch
 from PIL import Image
