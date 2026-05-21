@@ -4,8 +4,10 @@ from PIL import Image
 
 def slice_turnaround_sheet(sheet_path, num_views=None, bg_threshold=240, target_size=(512, 512)):
     """
-    Slices a horizontal turnaround sheet image into individual views.
-    Automatically detects 4 or 6 views if num_views is not specified.
+    Slices a turnaround sheet image into individual views.
+    Supports both:
+      1. Single-row layout (Aspect Ratio >= 3.5, e.g., 4 or 6 views side-by-side)
+      2. 2-row grid layout (Aspect Ratio < 3.5, Row 1 = 4 horizontal views, Row 2 = 2 vertical views)
     """
     if not os.path.exists(sheet_path):
         raise FileNotFoundError(f"Turnaround sheet not found at: {sheet_path}")
@@ -14,32 +16,62 @@ def slice_turnaround_sheet(sheet_path, num_views=None, bg_threshold=240, target_
     width, height = sheet.size
     aspect_ratio = width / height
     
-    # Auto-detect number of views based on aspect ratio
-    if num_views is None:
-        if aspect_ratio >= 5.0:
-            num_views = 6
-            print(f"[*] Auto-detected 6-view turnaround sheet (Aspect Ratio: {aspect_ratio:.2f})")
-        else:
-            num_views = 4
-            print(f"[*] Auto-detected 4-view turnaround sheet (Aspect Ratio: {aspect_ratio:.2f})")
-    else:
-        print(f"[*] Using user-specified {num_views}-view configuration")
-        
-    segment_width = width / num_views
     views = []
     
-    for i in range(num_views):
-        left = int(i * segment_width)
-        right = int((i + 1) * segment_width)
-        box = (left, 0, right, height)
+    # Detect if it is a 2-row grid layout (Aspect ratio is usually ~2.0 for a 4x2 grid)
+    is_2row_grid = aspect_ratio < 3.5
+    
+    if is_2row_grid:
+        print(f"[*] Detected 2-row grid layout based on Aspect Ratio: {aspect_ratio:.2f}")
+        # Height of each row is half of the total height
+        row_height = height // 2
         
-        # Crop segment
-        segment = sheet.crop(box)
-        
-        # Clean background, center object, and pad
-        processed = remove_background_and_center(segment, bg_threshold=bg_threshold, target_size=target_size)
-        views.append(processed)
-        
+        # Row 1 (Top Row): Contains 4 horizontal views (Front, Left, Back, Right)
+        segment_width = width / 4
+        print("[*] Slicing Row 1 into 4 horizontal views...")
+        for i in range(4):
+            left = int(i * segment_width)
+            right = int((i + 1) * segment_width)
+            box = (left, 0, right, row_height)
+            segment = sheet.crop(box)
+            processed = remove_background_and_center(segment, bg_threshold=bg_threshold, target_size=target_size)
+            views.append(processed)
+            
+        # Row 2 (Bottom Row): Contains 2 vertical views (Top, Bottom)
+        print("[*] Slicing Row 2 into 2 vertical views (Top, Bottom)...")
+        # Divide bottom row into 2 equal halves (Left half for Top, Right half for Bottom)
+        bottom_segment_width = width / 2
+        for i in range(2):
+            left = int(i * bottom_segment_width)
+            right = int((i + 1) * bottom_segment_width)
+            box = (left, row_height, right, height)
+            segment = sheet.crop(box)
+            processed = remove_background_and_center(segment, bg_threshold=bg_threshold, target_size=target_size)
+            views.append(processed)
+            
+        print(f"[+] Successfully extracted 6 views from 2-row grid layout.")
+    else:
+        # Single-row layout (original behavior)
+        if num_views is None:
+            if aspect_ratio >= 5.0:
+                num_views = 6
+                print(f"[*] Auto-detected single-row 6-view turnaround sheet (Aspect Ratio: {aspect_ratio:.2f})")
+            else:
+                num_views = 4
+                print(f"[*] Auto-detected single-row 4-view turnaround sheet (Aspect Ratio: {aspect_ratio:.2f})")
+        else:
+            print(f"[*] Using user-specified {num_views}-view configuration")
+            
+        segment_width = width / num_views
+        print(f"[*] Slicing single-row into {num_views} views...")
+        for i in range(num_views):
+            left = int(i * segment_width)
+            right = int((i + 1) * segment_width)
+            box = (left, 0, right, height)
+            segment = sheet.crop(box)
+            processed = remove_background_and_center(segment, bg_threshold=bg_threshold, target_size=target_size)
+            views.append(processed)
+            
     return views
 
 def remove_background_and_center(img, bg_threshold=240, target_size=(512, 512)):

@@ -388,6 +388,41 @@ class TestMultiViewSystem(unittest.TestCase):
             if os.path.exists(p):
                 os.remove(p)
 
+    def test_image_slicing_auto_detect_2row_grid(self):
+        """Tests that a 2-row grid turnaround sheet (4 on top, 2 on bottom) is correctly sliced."""
+        grid_path = os.path.join(self.output_dir, "dummy_grid_sheet.png")
+        
+        # Create a 2-row grid image (400x200)
+        # Row 1 (y: 0-100): 4 views
+        # Row 2 (y: 100-200): 2 views
+        sheet = Image.new("RGB", (400, 200), (255, 255, 255))
+        draw = ImageDraw.Draw(sheet)
+        
+        # Row 1 (4 squares)
+        for i in range(4):
+            left = i * 100
+            right = (i + 1) * 100
+            draw.rectangle([left + 20, 20, right - 20, 80], fill=(255, 0, 0))
+            
+        # Row 2 (2 squares)
+        for i in range(2):
+            left = i * 200
+            right = (i + 1) * 200
+            draw.rectangle([left + 40, 120, right - 40, 180], fill=(0, 255, 0))
+            
+        sheet.save(grid_path)
+        
+        try:
+            views = slice_turnaround_sheet(grid_path)
+            self.assertEqual(len(views), 6, "Should extract exactly 6 views from the grid layout!")
+            for idx, view in enumerate(views):
+                self.assertEqual(view.size, (512, 512))
+                self.assertEqual(view.mode, "RGB")
+        finally:
+            if os.path.exists(grid_path):
+                os.remove(grid_path)
+
 if __name__ == "__main__":
     unittest.main()
+
 
