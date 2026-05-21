@@ -1,11 +1,12 @@
 # 🏗️ Hunyuan3D-2.1 Advanced Extension & BIM Pipeline
 
-이 프로젝트는 Tencent의 **Hunyuan3D-2.1**을 확장하여, 다각도 실사 투영 복원, 듀얼 GPU 메모리 최적화, 그리고 생성된 3D 에셋을 건설정보모델링(BIM) 표준인 IFC 포맷으로 변환해 벽체 중공(Hollowing)을 지원하는 고급 엔지니어링 파이프라인입니다.
+이 프로젝트는 Tencent의 **Hunyuan3D-2.1**을 확장하여, 다각도 실사 투영 복원, 듀얼 GPU 메모리 최적화, 그리고 생성된 3D 에셋을 라이노(Rhino) 및 디지털 가공(3D 프린터/CNC)용 초정밀 CAD 포맷으로 변환하는 하이엔드 엔지니어링 파이프라인입니다.
 
-본 저장소는 다음의 세 가지 핵심 모듈로 구성되어 있습니다:
+본 저장소는 다음의 네 가지 핵심 모듈로 구성되어 있습니다:
 1. **🔄 4-to-6 Directional Multi-View Image Fusion System (`multiview_pipeline.py`)**
 2. **⚡ Kaggle Dual-T4 GPU Optimization Notebooks (`kaggle/`)**
-3. **🧱 GLB-to-IFC BIM Converter with Wall Hollowing (`glb_to_ifc.py`)**
+3. **📐 CAD & Digital Fabrication Mesh Exporter (`glb_to_cad.py`)** [추천]
+4. **🧱 GLB-to-IFC BIM Converter with Wall Hollowing (`glb_to_ifc.py`)**
 
 ---
 
@@ -14,6 +15,7 @@
 ```
 c:/image_to_3d/
 ├── multiview_pipeline.py      # 멀티뷰 turnaround 복원 파이프라인 CLI 오케스트레이터
+├── glb_to_cad.py              # CAD 및 디지털 패브리케이션용 메쉬 가속 Exporter
 ├── glb_to_ifc.py              # 솔리드 메쉬 -> 중공형 BIM IFC 포맷 변환 스크립트
 ├── test_multiview_system.py   # 로컬 CPU 환경용 통합 회귀 테스트 스위트
 ├── multiview_utils/           # 멀티뷰 코어 연산 모듈 (네임스페이스 충돌 방지 격리)
@@ -64,22 +66,36 @@ Kaggle의 듀얼 T4 GPU 세션 환경에서 VRAM 파편화와 Out of Memory(OOM)
 
 ---
 
-## 🧱 3. GLB-to-IFC BIM 변환 파이프라인 (Hollowing 벽체 중공 특화)
-생성된 3D 메쉬 오브젝트(.glb)를 표준 BIM 엔지니어링 규격인 IFC4 포맷으로 자동 번역하고, 내부를 비워 실제 벽체 두께를 연출하는 고성능 토목/건축용 파이프라인입니다.
+## 📐 3. CAD & Digital Fabrication Mesh Exporter (`glb_to_cad.py`)
+이 모듈은 AI가 생성한 유기적이고 복잡한 비선형(비정형) 3D 모델을 실제 설계 소프트웨어(라이노, 카티아 등) 및 공장 가공(3D 프린팅, CNC)에 바로 적용할 수 있도록 초정밀 엔지니어링 포맷으로 복구·최적화·변환해 줍니다.
 
-### 핵심 기술 요약
-- **버텍스 노멀 오프셋 쉘링 ($v_{\text{new}} = v - thickness \times \vec{n}$)**: 메쉬의 표면 노멀(법선 벡터)의 내부 방향으로 면을 축소 복제하고 법선을 뒤집어(Winding Inversion) **완벽한 이중 벽체 구조**를 만들어냅니다.
-- **자동 단위 스케일 조정**: Blender나 AI 생성 모델의 무작위 단위를 실제 BIM 뷰어에서 정합적으로 작동하는 **국제표준 미터(Meter) 규격**으로 고밀도 선형 오조정합니다.
-- **BIM 개체 정식 클래스 바인딩**: 단순히 파일만 변환하는 것이 아니라, IFC 계통도 내부의 `IfcWall`, `IfcSlab`, `IfcColumn` 등 유효한 BIM 엔티티로 완벽하게 등록합니다.
+> [!TIP]
+> **왜 IFC 변환 대신 이 방식을 쓰나요?**
+> 곡선이나 유체적인 흐름을 가진 비정형 건축물은 다각형 형태의 IFC로 직접 넘기면 수정 불가능한 무거운 돌덩어리가 됩니다. 대신, AI 모델의 삼각형 메쉬를 사각형 정렬(Quad-Mesh) 상태로 변환한 후 **Rhino SubD**를 이용해 **완벽한 수학적 곡선(NURBS) 솔리드**로 가공하여 수출하는 것이 세계 표준 워크플로우입니다.
+
+### 핵심 기능 및 기술
+- **메쉬 자가 복구 & 청소**: 인접 정점 병합(`merge_vertices`), 법선 벡터 재정렬(`fix_normals`), 불완전 면 제거를 통해 구멍이 없는 완벽한 Watertight 메쉬로 자동 복원합니다.
+- **곡률 대비 적응형 메시 감축 (Curvature-Adaptive Decimation)**: 평평한 평면 부위는 삼각형 개수를 대폭 간소화하고, 부드러운 곡선 부위의 디테일은 촘촘하게 유지하여 가벼우면서도 완벽한 형태를 유지합니다.
+- **용도별 맞춤 가속 포맷 추출**:
+  1.  `[이름]_quad_ready.obj`: 라이노의 **QuadRemesh** 엔진이 가장 깔끔하게 인식할 수 있도록 고르게 분포된 메쉬 구조를 제공합니다.
+  2.  `[이름]_fabrication.stl`: 3D 프린터 및 CNC 가공용 표준 포맷으로, 실제 미터법 규격(m, cm, mm) 단위로 정밀하게 스케일이 사전 계산되어 출력됩니다.
+  3.  `[이름]_pointcloud.ply`: 고밀도 컬러 텍스처를 손실 없이 보존한 포인트 클라우드 포맷으로, 레빗(Revit) 등에 스캔 참조 데이터로 즉시 가볍게 로딩할 수 있습니다.
 
 ### 💻 사용 방법 (CLI 터미널)
 ```bash
-# 기본 변환 (솔리드 메쉬 -> IFC 미터 스케일 정합화)
-python glb_to_ifc.py my_model.glb output_bim.ifc --class IfcWall
+# 기본 CAD 변환 (자동 스케일 감지, 기본 mm 단위로 실사 3D 모델에서 3개 포맷 동시 추출)
+python glb_to_cad.py my_model.glb ./output_cad/
 
-# 벽체 두께 15cm 중공(Hollowing) 벽체 변환 기법 적용
-python glb_to_ifc.py my_model.glb output_wall.ifc --hollow --thickness 0.15 --class IfcWall
+# 정밀 가공 최적화: 삼각형 면 개수를 50%로 줄이고, 실제 cm 단위 크기로 스케일하여 내보내기
+python glb_to_cad.py my_model.glb ./output_cad/ --decimate 0.5 --unit cm
 ```
+
+### 🏛️ 비정형/유기적 건축 라이노(Rhino) 연동 프로 워크플로우
+1. `glb_to_cad.py`를 통해 생성된 `[이름]_quad_ready.obj`를 라이노로 가져옵니다 (`Import`).
+2. 라이노 명령창에 `QuadRemesh`를 입력하고 실행하여 삼각형 메쉬를 정밀한 **사각 메쉬(Quad Mesh)**로 바꿉니다.
+3. 사각 메쉬를 선택하고 `ToSubD` 명령어를 입력하여 면이 부드럽게 이어지는 **SubD(Subdivision Surface)** 모델로 바꿉니다.
+4. 마지막으로 SubD 모델을 선택하고 `Convert` 명령어를 통해 **NURBS(비정형 서피스 솔리드)**로 최종 전환합니다.
+5. 완성된 NURBS 솔리드는 마우스 클릭으로 벽체 두께를 조절하거나, 완벽한 수학적 곡선 상태로 **STEP/IGES**로 내보내 기계 가공에 적용할 수 있습니다.
 
 ---
 

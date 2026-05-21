@@ -358,5 +358,36 @@ class TestMultiViewSystem(unittest.TestCase):
         self.assertEqual(magenta_pixel[0], 255) # Magenta (R=255, G=0, B=255)
         self.assertEqual(cyan_pixel[1], 255) # Cyan (R=0, G=255, B=255)
 
+    def test_cad_exporter_pipeline(self):
+        """Tests that glb_to_cad correctly loads, repairs, and exports CAD formats."""
+        from glb_to_cad import convert_glb_to_cad
+        
+        # Run conversion on our dummy mesh
+        success = convert_glb_to_cad(
+            glb_path=self.dummy_mesh_path,
+            output_dir=self.output_dir,
+            scale_factor=1.0,
+            target_unit="mm",
+            decimate_fraction=0.0,
+            sample_points=50
+        )
+        
+        self.assertTrue(success)
+        
+        # Check that outputs exist
+        obj_out = os.path.join(self.output_dir, "dummy_mesh_quad_ready.obj")
+        stl_out = os.path.join(self.output_dir, "dummy_mesh_fabrication.stl")
+        ply_out = os.path.join(self.output_dir, "dummy_mesh_pointcloud.ply")
+        
+        self.assertTrue(os.path.exists(obj_out), "Quad-ready OBJ was not created!")
+        self.assertTrue(os.path.exists(stl_out), "Fabrication STL was not created!")
+        self.assertTrue(os.path.exists(ply_out), "Pointcloud PLY was not created!")
+        
+        # Clean up CAD output files
+        for p in [obj_out, stl_out, ply_out]:
+            if os.path.exists(p):
+                os.remove(p)
+
 if __name__ == "__main__":
     unittest.main()
+
