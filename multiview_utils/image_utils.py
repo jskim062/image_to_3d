@@ -63,7 +63,8 @@ def slice_turnaround_sheet(sheet_path, num_views=None, bg_threshold=240,
         print("[*] AI 배경 제거 모드 (rembg) 활성화")
 
     # Detect if it is a 2-row grid layout (Aspect ratio is usually ~2.0 for a 4x2 grid)
-    is_2row_grid = aspect_ratio < 3.5
+    # If the user explicitly requested 4 views, it cannot be a 2-row grid (which has 6 views).
+    is_2row_grid = aspect_ratio < 3.5 and num_views != 4
 
     if is_2row_grid:
         print(f"[*] Detected 2-row grid layout based on Aspect Ratio: {aspect_ratio:.2f}")
