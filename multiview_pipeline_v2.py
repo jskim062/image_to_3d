@@ -215,7 +215,17 @@ def run_multiview_pipeline(args):
             )[0]
 
         base_mesh_path = os.path.join(args.output_dir, "base_geometry.glb")
-        mesh.export(base_mesh_path)
+        exported = mesh.export(base_mesh_path)
+        # trimesh 일부 버전은 경로를 줘도 bytes를 반환하고 쓰지 않음 → 수동 저장
+        if not os.path.exists(base_mesh_path):
+            if isinstance(exported, bytes) and len(exported) > 0:
+                with open(base_mesh_path, 'wb') as _f:
+                    _f.write(exported)
+                print("[shape] trimesh returned bytes; written to disk manually.")
+            else:
+                raise RuntimeError(
+                    f"[shape] mesh.export() failed to create {base_mesh_path}"
+                )
         print(f"[SUCCESS] Base geometry saved: {base_mesh_path}")
 
         del mesh, shape_pipeline
