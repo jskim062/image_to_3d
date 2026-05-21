@@ -151,15 +151,20 @@ def run_multiview_pipeline(args):
 
     # Clean up old output files from previous runs in this output directory to prevent leftovers/mixing
     print(f"[*] Cleaning up previous run outputs in {args.output_dir}...")
+    input_mesh_abs = os.path.abspath(args.mesh) if args.mesh else None
     for filename in os.listdir(args.output_dir):
+        file_path = os.path.join(args.output_dir, filename)
         if filename.startswith("sliced_view_") and filename.endswith(".png"):
             try:
-                os.remove(os.path.join(args.output_dir, filename))
+                os.remove(file_path)
             except Exception:
                 pass
         elif filename in ["base_geometry.glb", "base_geometry.obj", "final_multiview_result.glb", "final_multiview_result.obj", "final_multiview_result.mtl", "textured_mesh.obj", "white_mesh_remesh.obj"]:
+            if input_mesh_abs and os.path.abspath(file_path) == input_mesh_abs:
+                print(f"[*] Preserving input mesh: {filename}")
+                continue
             try:
-                os.remove(os.path.join(args.output_dir, filename))
+                os.remove(file_path)
             except Exception:
                 pass
 
