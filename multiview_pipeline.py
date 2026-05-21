@@ -51,6 +51,70 @@ except ImportError:
 from multiview_utils.image_utils import slice_turnaround_sheet
 from multiview_utils.multiview_paint_pipeline import MultiViewPaintPipeline
 
+# ---------------------------------------------------------------------------
+# CLIP-based automatic view classification
+# ---------------------------------------------------------------------------
+
+_CLIP_PROMPTS = {
+    "front":  "front view of an object or building, facing forward",
+    "back":   "back view of an object or building, rear side visible",
+    "right":  "right side profile view of an object or building",
+    "left":   "left side profile view of an object or building",
+    "top":    "top-down bird's eye view of an object or building from above",
+    "bottom": "bottom view of an object or building from below",
+}
+
+_HUNYUAN_ORDER = ["front", "right", "back", "left", "top", "bottom"]
+
+def classify_views_with_clip(views, device="cuda:0"):
+    """
+    Classifies view directions automatically using CLIP and reorders them to Hunyuan3D camera sequence.
+    """
+    print("[CLIP] Loading CLIP model for automatic view classification...")
+    from transformers import CLIPProcessor, CLIPModel
+    import numpy as np
+
+    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    model.eval()
+
+    directions = _HUNYUAN_ORDER[:len(views)]
+    prompts = [_CLIP_PROMPTS[d] for d in directions]
+
+    scores = []
+    with torch.no_grad():
+        for view in views:
+            inputs = processor(
+                text=prompts,
+                images=view.convert("RGB"),
+                return_tensors="pt",
+                padding=True,
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            logits = model(**inputs).logits_per_image[0].cpu().numpy()
+            scores.append(logits)
+
+    scores = np.array(scores)
+
+    assignment = {}
+    used = set()
+    for dir_idx, direction in enumerate(directions):
+        candidates = [i for i in range(len(views)) if i not in used]
+        best_view_idx = max(candidates, key=lambda i: scores[i, dir_idx])
+        assignment[direction] = views[best_view_idx]
+        used.add(best_view_idx)
+        print(f"  [CLIP] {direction:6s} ← view #{best_view_idx}  "
+              f"(score {scores[best_view_idx, dir_idx]:.2f})")
+
+    del model
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    result = [assignment[d] for d in _HUNYUAN_ORDER if d in assignment]
+    print(f"[CLIP] Classification complete. Output order: {[d for d in _HUNYUAN_ORDER if d in assignment]}")
+    return result
+
 def run_multiview_pipeline(args):
     print("=====================================================================")
     print("[*] Hunyuan3D Fork: 4-to-6 Directional Multi-View Image Fusion System")
@@ -72,48 +136,46 @@ def run_multiview_pipeline(args):
     print(f"[+] Diagnostic sliced views saved to: {args.output_dir}")
     
     # Reorder views to match Hunyuan3D camera selection order: [Front, Right, Back, Left, (Top, Bottom)]
-    # Target camera mapping:
-    #   Index 0: Front
-    #   Index 1: Right
-    #   Index 2: Back
-    #   Index 3: Left
-    #   Index 4: Top
-    #   Index 5: Bottom
-    print(f"[*] Reordering views from '{args.view_order}' to match Hunyuan3D camera selection index mapping...")
-    if "," in args.view_order:
-        user_order = [s.strip().lower() for s in args.view_order.split(",")]
-        if len(user_order) != len(views):
-            raise ValueError(f"Length of custom view order ({len(user_order)}) must match number of sliced views ({len(views)}). Got: {args.view_order}")
-            
-        # Target directions in the exact order Hunyuan3D expects
-        if len(views) == 4:
-            target_dirs = ["front", "right", "back", "left"]
-        else:
-            target_dirs = ["front", "right", "back", "left", "top", "bottom"]
-            
-        reordered_views = []
-        for target in target_dirs:
-            if target not in user_order:
-                raise ValueError(f"Required direction '{target}' missing from custom view order: {args.view_order}")
-            sliced_idx = user_order.index(target)
-            reordered_views.append(views[sliced_idx])
-        views = reordered_views
-    elif args.view_order == "front_left_back_right":
-        if len(views) == 4:
-            # Sliced: [0: Front, 1: Left, 2: Back, 3: Right]
-            views = [views[0], views[3], views[2], views[1]]
-        elif len(views) == 6:
-            # Sliced: [0: Front, 1: Left, 2: Back, 3: Right, 4: Top, 5: Bottom]
-            views = [views[0], views[3], views[2], views[1], views[4], views[5]]
-    elif args.view_order == "front_right_back_left":
-        if len(views) == 4:
-            # Sliced: [0: Front, 1: Right, 2: Back, 3: Left]
-            views = [views[0], views[1], views[2], views[3]]
-        elif len(views) == 6:
-            # Sliced: [0: Front, 1: Right, 2: Back, 3: Left, 4: Top, 5: Bottom]
-            views = [views[0], views[1], views[2], views[3], views[4], views[5]]
+    if getattr(args, "auto_classify", False):
+        print("[*] Auto-classifying view directions with CLIP...")
+        views = classify_views_with_clip(views, device=args.device)
+        print(f"[+] CLIP classified {len(views)} views.")
     else:
-        raise ValueError(f"Unknown view order: {args.view_order}")
+        print(f"[*] Reordering views from '{args.view_order}' to match Hunyuan3D camera selection index mapping...")
+        if "," in args.view_order:
+            user_order = [s.strip().lower() for s in args.view_order.split(",")]
+            if len(user_order) != len(views):
+                raise ValueError(f"Length of custom view order ({len(user_order)}) must match number of sliced views ({len(views)}). Got: {args.view_order}")
+                
+            # Target directions in the exact order Hunyuan3D expects
+            if len(views) == 4:
+                target_dirs = ["front", "right", "back", "left"]
+            else:
+                target_dirs = ["front", "right", "back", "left", "top", "bottom"]
+                
+            reordered_views = []
+            for target in target_dirs:
+                if target not in user_order:
+                    raise ValueError(f"Required direction '{target}' missing from custom view order: {args.view_order}")
+                sliced_idx = user_order.index(target)
+                reordered_views.append(views[sliced_idx])
+            views = reordered_views
+        elif args.view_order == "front_left_back_right":
+            if len(views) == 4:
+                # Sliced: [0: Front, 1: Left, 2: Back, 3: Right]
+                views = [views[0], views[3], views[2], views[1]]
+            elif len(views) == 6:
+                # Sliced: [0: Front, 1: Left, 2: Back, 3: Right, 4: Top, 5: Bottom]
+                views = [views[0], views[3], views[2], views[1], views[4], views[5]]
+        elif args.view_order == "front_right_back_left":
+            if len(views) == 4:
+                # Sliced: [0: Front, 1: Right, 2: Back, 3: Left]
+                views = [views[0], views[1], views[2], views[3]]
+            elif len(views) == 6:
+                # Sliced: [0: Front, 1: Right, 2: Back, 3: Left, 4: Top, 5: Bottom]
+                views = [views[0], views[1], views[2], views[3], views[4], views[5]]
+        else:
+            raise ValueError(f"Unknown view order: {args.view_order}")
     
     # 2. Geometry (Shape) Generation Stage
     base_mesh_path = args.mesh
@@ -183,6 +245,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_views", type=int, default=None, help="Number of views (4 or 6). Auto-detected if omitted.")
     parser.add_argument("--view_order", type=str, default="front_left_back_right", 
                         help="View order in the sheet. Can be a preset ('front_left_back_right', 'front_right_back_left') or a custom comma-separated string (e.g. 'front,left,back,right,top,bottom').")
+    parser.add_argument("--auto_classify", action="store_true",
+                        help="Use CLIP to automatically detect front/back/left/right/top/bottom. Overrides --view_order.")
     parser.add_argument("--mesh", type=str, default=None, help="Path to existing base GLB/OBJ mesh (reuses geometry).")
     parser.add_argument("--resolution", type=int, default=512, help="Texturing pipeline resolution (default: 512).")
     parser.add_argument("--bg_threshold", type=int, default=240, help="White background cropping threshold (default: 240).")

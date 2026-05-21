@@ -509,6 +509,80 @@ class TestMultiViewSystem(unittest.TestCase):
             if os.path.exists(sheet_path):
                 os.remove(sheet_path)
 
+    @patch('transformers.CLIPModel')
+    @patch('transformers.CLIPProcessor')
+    def test_pipeline_auto_classify_with_clip_mock(self, mock_processor_class, mock_model_class):
+        """Tests that auto_classify correctly loads CLIP and reorders views based on mock scores."""
+        mock_model = MagicMock()
+        mock_model_class.from_pretrained.return_value = mock_model
+        
+        mock_processor = MagicMock()
+        mock_processor_class.from_pretrained.return_value = mock_processor
+        
+        mock_outputs = []
+        # View 0 (Red: Front): scores highest on front (idx 0)
+        out0 = MagicMock()
+        out0.logits_per_image = [MagicMock()]
+        out0.logits_per_image[0].cpu.return_value.numpy.return_value = np.array([10.0, 1.0, 1.0, 1.0])
+        mock_outputs.append(out0)
+        
+        # View 1 (Green: Left): scores highest on left (idx 3)
+        out1 = MagicMock()
+        out1.logits_per_image = [MagicMock()]
+        out1.logits_per_image[0].cpu.return_value.numpy.return_value = np.array([1.0, 1.0, 1.0, 10.0])
+        mock_outputs.append(out1)
+        
+        # View 2 (Blue: Back): scores highest on back (idx 2)
+        out2 = MagicMock()
+        out2.logits_per_image = [MagicMock()]
+        out2.logits_per_image[0].cpu.return_value.numpy.return_value = np.array([1.0, 1.0, 10.0, 1.0])
+        mock_outputs.append(out2)
+        
+        # View 3 (Yellow: Right): scores highest on right (idx 1)
+        out3 = MagicMock()
+        out3.logits_per_image = [MagicMock()]
+        out3.logits_per_image[0].cpu.return_value.numpy.return_value = np.array([1.0, 10.0, 1.0, 1.0])
+        mock_outputs.append(out3)
+        
+        mock_model.to.return_value.side_effect = mock_outputs
+        
+        # Set up pipeline args
+        class Args:
+            sheet = self.sheet_4view_path
+            num_views = 4
+            view_order = "front_left_back_right"
+            auto_classify = True
+            mesh = self.dummy_mesh_path
+            resolution = 256
+            bg_threshold = 240
+            device = "cpu"
+            output_dir = self.output_dir
+            
+        args = Args()
+        
+        # Set up mock paint pipeline
+        mock_paint_inst = MagicMock()
+        mock_paint_inst.return_value = os.path.join(self.output_dir, "final_multiview_result.glb")
+        mock_paint_pipeline_class.return_value = mock_paint_inst
+        
+        # Run orchestrator
+        run_multiview_pipeline(args)
+        
+        # Verify target order resolves to [Front (Red), Right (Yellow), Back (Blue), Left (Green)]
+        call_kwargs = mock_paint_inst.call_args[1]
+        passed_views = call_kwargs["views"]
+        self.assertEqual(len(passed_views), 4)
+        
+        front_pixel = np.array(passed_views[0])[50, 50]
+        right_pixel = np.array(passed_views[1])[50, 50]
+        back_pixel = np.array(passed_views[2])[50, 50]
+        left_pixel = np.array(passed_views[3])[50, 50]
+        
+        self.assertEqual(front_pixel[0], 255) # Red
+        self.assertEqual(right_pixel[0], 255) # Yellow
+        self.assertEqual(back_pixel[2], 255) # Blue
+        self.assertEqual(left_pixel[1], 255) # Green
+
 if __name__ == "__main__":
     unittest.main()
 
