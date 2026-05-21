@@ -28,6 +28,49 @@ from utils.simplify_mesh_utils import remesh_mesh
 from multiview_utils.image_utils import align_multiview_colors
 
 
+def _opencv_inpaint_fallback(texture_np, mask, vtx_pos, vtx_uv, pos_idx, uv_idx):
+    """
+    OpenCV TELEA inpainting fallback for when the C++ meshVerticeInpaint
+    extension (mesh_inpaint_processor) is not compiled/available on Kaggle.
+    Ignores mesh topology args; does pure image-space inpainting instead.
+    """
+    import cv2
+
+    # Normalise mask → uint8, nonzero = region to inpaint
+    mask_u8 = (mask > 0).astype(np.uint8) * 255
+
+    # Normalise texture → uint8
+    if texture_np.dtype != np.uint8:
+        tex_u8 = np.clip(
+            texture_np * 255 if texture_np.max() <= 1.0 else texture_np,
+            0, 255,
+        ).astype(np.uint8)
+    else:
+        tex_u8 = texture_np
+
+    inpainted = cv2.inpaint(tex_u8, mask_u8, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+    return inpainted.astype(texture_np.dtype), np.zeros_like(mask)
+
+
+def _patch_mesh_render_if_needed():
+    """
+    If MeshRender's meshVerticeInpaint is undefined (C++ extension missing),
+    inject the OpenCV fallback directly into the module's global namespace.
+    """
+    import importlib
+    try:
+        mesh_render = sys.modules.get('DifferentiableRenderer.MeshRender')
+        if mesh_render is None:
+            mesh_render = importlib.import_module('DifferentiableRenderer.MeshRender')
+        if not hasattr(mesh_render, 'meshVerticeInpaint'):
+            mesh_render.meshVerticeInpaint = _opencv_inpaint_fallback
+            print("[multiview] meshVerticeInpaint not found — patched with OpenCV TELEA fallback.")
+        else:
+            print("[multiview] meshVerticeInpaint (C++ extension) available.")
+    except Exception as e:
+        print(f"[multiview] Warning: MeshRender patch attempt failed: {e}")
+
+
 def robust_convert_obj_to_glb(obj_path, glb_path):
     is_mock = isinstance(sys.modules.get('bpy'), MagicMock)
 
@@ -89,6 +132,9 @@ class MultiViewPaintPipeline(Hunyuan3DPaintPipeline):
         if views is None or len(views) < 4:
             print("[multiview] Fewer than 4 views — falling back to single-image pipeline.")
             return super().__call__(mesh_path, image_path, output_mesh_path, use_remesh, save_glb)
+
+        # Ensure meshVerticeInpaint is available (C++ ext may not be compiled on Kaggle)
+        _patch_mesh_render_if_needed()
 
         print(f"[multiview] Starting Multi-View texture synthesis with {len(views)} views...")
 
