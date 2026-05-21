@@ -422,6 +422,93 @@ class TestMultiViewSystem(unittest.TestCase):
             if os.path.exists(grid_path):
                 os.remove(grid_path)
 
+    def test_pipeline_custom_comma_separated_view_order(self):
+        """Tests that a custom comma-separated view order is correctly parsed and mapped."""
+        # Create a mock 6-view horizontal sheet
+        sheet_path = os.path.join(self.output_dir, "custom_6view_sheet.png")
+        # Color coding:
+        # Index 0: Green (Left)
+        # Index 1: Red (Front)
+        # Index 2: Blue (Back)
+        # Index 3: Yellow (Right)
+        # Index 4: Cyan (Bottom)
+        # Index 5: Magenta (Top)
+        # So the sliced order is: left, front, back, right, bottom, top
+        width = 600
+        height = 100
+        sheet = Image.new("RGB", (width, height), (255, 255, 255))
+        draw = ImageDraw.Draw(sheet)
+        
+        colors = [
+            (0, 255, 0),    # Green (Left)
+            (255, 0, 0),    # Red (Front)
+            (0, 0, 255),    # Blue (Back)
+            (255, 255, 0),  # Yellow (Right)
+            (0, 255, 255),  # Cyan (Bottom)
+            (255, 0, 255)   # Magenta (Top)
+        ]
+        
+        for i in range(6):
+            left = i * 100
+            right = (i + 1) * 100
+            draw.rectangle([left + 20, 20, right - 20, 80], fill=colors[i])
+        sheet.save(sheet_path)
+        
+        try:
+            # Set up mock paint pipeline
+            mock_paint_inst = MagicMock()
+            mock_paint_inst.return_value = os.path.join(self.output_dir, "final_multiview_result.glb")
+            mock_paint_pipeline_class.return_value = mock_paint_inst
+            
+            # Setup pipeline args with custom view order
+            class Args:
+                sheet = sheet_path
+                num_views = 6
+                view_order = "left,front,back,right,bottom,top" # custom order
+                mesh = self.dummy_mesh_path
+                resolution = 256
+                bg_threshold = 240
+                device = "cpu"
+                output_dir = self.output_dir
+                
+            args = Args()
+            
+            # Run orchestrator
+            run_multiview_pipeline(args)
+            
+            # Verify the views were reordered correctly to Hunyuan3D expectations:
+            # Target order: [Front, Right, Back, Left, Top, Bottom]
+            # Sliced indexes in sheet are: left=0, front=1, back=2, right=3, bottom=4, top=5
+            # Target mapping should resolve to sliced indexes: [1, 3, 2, 0, 5, 4]
+            # Colors:
+            #   Front: Red
+            #   Right: Yellow
+            #   Back: Blue
+            #   Left: Green
+            #   Top: Magenta
+            #   Bottom: Cyan
+            call_kwargs = mock_paint_inst.call_args[1]
+            passed_views = call_kwargs["views"]
+            self.assertEqual(len(passed_views), 6)
+            
+            front_pixel = np.array(passed_views[0])[50, 50]
+            right_pixel = np.array(passed_views[1])[50, 50]
+            back_pixel = np.array(passed_views[2])[50, 50]
+            left_pixel = np.array(passed_views[3])[50, 50]
+            top_pixel = np.array(passed_views[4])[50, 50]
+            bottom_pixel = np.array(passed_views[5])[50, 50]
+            
+            self.assertEqual(front_pixel[0], 255) # Red
+            self.assertEqual(right_pixel[0], 255) # Yellow
+            self.assertEqual(back_pixel[2], 255) # Blue
+            self.assertEqual(left_pixel[1], 255) # Green
+            self.assertEqual(top_pixel[0], 255) # Magenta
+            self.assertEqual(bottom_pixel[1], 255) # Cyan
+            
+        finally:
+            if os.path.exists(sheet_path):
+                os.remove(sheet_path)
+
 if __name__ == "__main__":
     unittest.main()
 

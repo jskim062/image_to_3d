@@ -225,12 +225,20 @@ class MultiViewPaintPipeline(Hunyuan3DPaintPipeline):
             "mr":     [self.models["super_model"](img) for img in multiviews_pbr["mr"]],
         }
 
-        # 9. Overwrite albedo slots with real photographs
-        print(f"[multiview] Projecting {len(views)} real photos onto albedo slots...")
+        # 9. Overwrite albedo slots with real photographs (RealESRGAN 4x 업스케일 적용)
+        # AI 생성 뷰뿐 아니라 실사 뷰에도 동일하게 RealESRGAN을 통해 품질을 높인다.
+        print(f"[multiview] Upscaling {len(views)} real photos with RealESRGAN and projecting...")
         for i in range(min(len(views), len(enhance_images["albedo"]))):
-            enhance_images["albedo"][i] = views[i].resize(
-                (self.config.render_size, self.config.render_size), Image.Resampling.LANCZOS
-            )
+            try:
+                upscaled = self.models["super_model"](views[i])  # 512 → 2048 (4x)
+                enhance_images["albedo"][i] = upscaled.resize(
+                    (self.config.render_size, self.config.render_size), Image.Resampling.LANCZOS
+                )
+            except Exception as e:
+                print(f"  [multiview] view {i} RealESRGAN 실패 ({e}), LANCZOS resize로 대체")
+                enhance_images["albedo"][i] = views[i].resize(
+                    (self.config.render_size, self.config.render_size), Image.Resampling.LANCZOS
+                )
 
         # 10. Normalize all slot sizes
         for i in range(len(enhance_images["albedo"])):

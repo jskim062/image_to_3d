@@ -155,6 +155,7 @@ def run_multiview_pipeline(args):
         args.sheet,
         num_views=args.num_views,
         bg_threshold=args.bg_threshold,
+        use_rembg=args.use_rembg,
     )
     print(f"[+] Sliced {len(views)} views.")
 
@@ -189,9 +190,15 @@ def run_multiview_pipeline(args):
             torch_dtype=torch.float16,
         )
 
-        print("[shape] Reconstructing base mesh from Front view...")
+        print(f"[shape] Reconstructing base mesh from Front view "
+              f"(octree={args.octree_resolution}, steps={args.steps}, cfg={args.guidance_scale})...")
         with torch.no_grad():
-            mesh = shape_pipeline(image=front_view_path)[0]
+            mesh = shape_pipeline(
+                image=front_view_path,
+                num_inference_steps=args.steps,
+                guidance_scale=args.guidance_scale,
+                octree_resolution=args.octree_resolution,
+            )[0]
 
         base_mesh_path = os.path.join(args.output_dir, "base_geometry.glb")
         mesh.export(base_mesh_path)
@@ -251,10 +258,22 @@ if __name__ == "__main__":
                              "Overrides --view_order.")
     parser.add_argument("--mesh", type=str, default=None,
                         help="Path to existing GLB/OBJ mesh (skips shape generation).")
+    # ── 형상 품질 ──────────────────────────────────────────────────────────────
+    parser.add_argument("--octree_resolution", type=int, default=512,
+                        help="메쉬 디테일 해상도. 기본 384→512. T4 권장 최대: 640. "
+                             "높을수록 디테일↑, VRAM↑, 속도↓.")
+    parser.add_argument("--steps", type=int, default=50,
+                        help="디퓨전 inference step 수. 기본 50. 100이면 더 정밀하나 2배 느림.")
+    parser.add_argument("--guidance_scale", type=float, default=5.0,
+                        help="Classifier-free guidance scale. 기본 5.0. 높을수록 이미지 충실도↑.")
+    # ── 입력 품질 ──────────────────────────────────────────────────────────────
+    parser.add_argument("--use_rembg", action="store_true",
+                        help="AI 배경 제거(rembg) 사용. threshold 방식보다 외곽선이 정밀함.")
+    parser.add_argument("--bg_threshold", type=int, default=240,
+                        help="threshold 방식 흰 배경 제거 임계값. --use_rembg 비활성 시 적용.")
+    # ── 공통 ───────────────────────────────────────────────────────────────────
     parser.add_argument("--resolution", type=int, default=512,
                         help="Texturing pipeline resolution (default: 512).")
-    parser.add_argument("--bg_threshold", type=int, default=240,
-                        help="White background crop threshold (default: 240).")
     parser.add_argument("--device", type=str, default="cuda:0",
                         help="CUDA device (default: cuda:0).")
     parser.add_argument("--output_dir", type=str, default="./output_multiview",

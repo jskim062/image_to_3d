@@ -80,7 +80,25 @@ def run_multiview_pipeline(args):
     #   Index 4: Top
     #   Index 5: Bottom
     print(f"[*] Reordering views from '{args.view_order}' to match Hunyuan3D camera selection index mapping...")
-    if args.view_order == "front_left_back_right":
+    if "," in args.view_order:
+        user_order = [s.strip().lower() for s in args.view_order.split(",")]
+        if len(user_order) != len(views):
+            raise ValueError(f"Length of custom view order ({len(user_order)}) must match number of sliced views ({len(views)}). Got: {args.view_order}")
+            
+        # Target directions in the exact order Hunyuan3D expects
+        if len(views) == 4:
+            target_dirs = ["front", "right", "back", "left"]
+        else:
+            target_dirs = ["front", "right", "back", "left", "top", "bottom"]
+            
+        reordered_views = []
+        for target in target_dirs:
+            if target not in user_order:
+                raise ValueError(f"Required direction '{target}' missing from custom view order: {args.view_order}")
+            sliced_idx = user_order.index(target)
+            reordered_views.append(views[sliced_idx])
+        views = reordered_views
+    elif args.view_order == "front_left_back_right":
         if len(views) == 4:
             # Sliced: [0: Front, 1: Left, 2: Back, 3: Right]
             views = [views[0], views[3], views[2], views[1]]
@@ -164,8 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--sheet", type=str, required=True, help="Path to horizontal multi-view sheet image.")
     parser.add_argument("--num_views", type=int, default=None, help="Number of views (4 or 6). Auto-detected if omitted.")
     parser.add_argument("--view_order", type=str, default="front_left_back_right", 
-                        choices=["front_left_back_right", "front_right_back_left"],
-                        help="Horizontal layout view order in turnaround sheet. Default: front_left_back_right.")
+                        help="View order in the sheet. Can be a preset ('front_left_back_right', 'front_right_back_left') or a custom comma-separated string (e.g. 'front,left,back,right,top,bottom').")
     parser.add_argument("--mesh", type=str, default=None, help="Path to existing base GLB/OBJ mesh (reuses geometry).")
     parser.add_argument("--resolution", type=int, default=512, help="Texturing pipeline resolution (default: 512).")
     parser.add_argument("--bg_threshold", type=int, default=240, help="White background cropping threshold (default: 240).")
