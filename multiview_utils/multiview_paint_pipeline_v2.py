@@ -28,6 +28,33 @@ from utils.simplify_mesh_utils import remesh_mesh
 from multiview_utils.image_utils import align_multiview_colors
 
 
+def _safe_remesh(input_path, output_path, target_count=40000):
+    """
+    pymeshlab 기반 decimation.
+    trimesh.simplify_quadric_decimation 은 trimesh 4.x + fast_simplification 조합에서
+    face_count(절댓값)를 target_reduction(0-1 비율)로 잘못 전달해 에러가 발생한다.
+    pymeshlab은 targetfacenum(절댓값)을 직접 받으므로 버전 무관하게 동작한다.
+    """
+    import pymeshlab
+    ms = pymeshlab.MeshSet()
+    ms.load_new_mesh(input_path)
+
+    face_num = ms.current_mesh().face_number()
+    if face_num > target_count:
+        try:
+            # pymeshlab 2022+ API
+            ms.meshing_decimation_quadric_edge_collapse(targetfacenum=target_count)
+        except Exception:
+            try:
+                # pymeshlab 2021 이하 API
+                ms.simplification_quadric_edge_collapse_decimation(targetfacenum=target_count)
+            except Exception as e:
+                print(f"[multiview] pymeshlab decimation 실패: {e}. 원본 face 수 유지.")
+
+    ms.save_current_mesh(output_path, save_textures=False)
+    return output_path
+
+
 def _opencv_inpaint_fallback(texture_np, mask, vtx_pos, vtx_uv, pos_idx, uv_idx):
     """
     OpenCV TELEA inpainting fallback for when the C++ meshVerticeInpaint
@@ -153,9 +180,9 @@ class MultiViewPaintPipeline(Hunyuan3DPaintPipeline):
         if use_remesh:
             processed_mesh_path = os.path.join(output_dir, "white_mesh_remesh.obj")
             try:
-                remesh_mesh(mesh_path, processed_mesh_path)
+                _safe_remesh(mesh_path, processed_mesh_path)
             except Exception as e:
-                print(f"[multiview] Warning: remesh_mesh failed ({e}). Using original mesh.")
+                print(f"[multiview] Warning: _safe_remesh failed ({e}). Using original mesh.")
                 processed_mesh_path = mesh_path
         else:
             processed_mesh_path = mesh_path
