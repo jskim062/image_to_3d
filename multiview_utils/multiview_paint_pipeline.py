@@ -10,6 +10,10 @@ from unittest.mock import MagicMock
 # Mock Blender (bpy) module globally to prevent ModuleNotFoundError on Kaggle/servers
 sys.modules['bpy'] = MagicMock()
 
+# Prevent torchvision import crash in modern environments (post-torchvision 0.15+) for basicsr/realesrgan
+import torchvision.transforms.functional as _tvf
+sys.modules['torchvision.transforms.functional_tensor'] = _tvf
+
 # Bind hy3dpaint path to Python path
 hy3dpaint_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Hunyuan3D-2.1", "hy3dpaint"))
 if hy3dpaint_path not in sys.path:

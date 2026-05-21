@@ -5,6 +5,10 @@ from unittest.mock import MagicMock
 # Mock Blender (bpy) module globally to prevent ModuleNotFoundError on Kaggle/servers
 sys.modules['bpy'] = MagicMock()
 
+# Prevent torchvision import crash in modern environments (post-torchvision 0.15+) for basicsr/realesrgan
+import torchvision.transforms.functional as _tvf
+sys.modules['torchvision.transforms.functional_tensor'] = _tvf
+
 import argparse
 import torch
 from PIL import Image
