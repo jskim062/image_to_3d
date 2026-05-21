@@ -221,6 +221,10 @@ def run_multiview_pipeline(args):
         del mesh, shape_pipeline
         gc.collect()
         torch.cuda.empty_cache()
+
+        if args.shape_only:
+            print("[*] --shape_only 모드: Shape 생성 완료 후 종료합니다.")
+            return
     else:
         print(f"\n[*] Skipping Shape Stage: reusing {base_mesh_path}")
 
@@ -286,6 +290,9 @@ if __name__ == "__main__":
     parser.add_argument("--bg_threshold", type=int, default=240,
                         help="threshold 방식 흰 배경 제거 임계값. --use_rembg 비활성 시 적용.")
     # ── 공통 ───────────────────────────────────────────────────────────────────
+    parser.add_argument("--shape_only", action="store_true",
+                        help="Shape 생성만 수행하고 base_geometry.glb 저장 후 종료. "
+                             "VRAM 완전 해제 후 텍스처 단계를 별도 프로세스로 실행할 때 사용.")
     parser.add_argument("--resolution", type=int, default=512,
                         help="Texturing pipeline resolution (default: 512).")
     parser.add_argument("--device", type=str, default="cuda:0",
