@@ -71,22 +71,23 @@ def reorder_views(views, view_order):
 # ---------------------------------------------------------------------------
 
 _CLIP_PROMPTS = {
-    "front":  "front view of a character, facing the camera, face fully visible",
-    "back":   "back view of a character, facing away, rear side visible",
-    "right":  "right side profile view of a character, body facing left",
-    "left":   "left side profile view of a character, body facing right",
-    "top":    "top-down bird's eye view of a character from above",
-    "bottom": "bottom view of a character from below",
+    "front":  "front view of an object or building or character, front side, facing camera",
+    "back":   "back view of an object or building or character, rear side, facing away",
+    "right":  "right side profile view of an object or building or character",
+    "left":   "left side profile view of an object or building or character",
+    "top":    "top-down bird's eye view of an object or building or character from above",
+    "bottom": "bottom view of an object or building or character from below",
 }
 
 # Hunyuan3D 기대 순서
 _HUNYUAN_ORDER = ["front", "right", "back", "left", "top", "bottom"]
 
 
-def classify_views_with_clip(views, device="cuda:0"):
+def classify_views_with_clip(views, labels=None, device="cuda:0"):
     """
     CLIP으로 각 뷰를 front/back/left/right/(top/bottom) 자동 분류 후
     Hunyuan3D 카메라 순서 [Front, Right, Back, Left, (Top, Bottom)]로 반환.
+    텍스트 라벨 이미지(labels)가 있다면 CLIP의 zero-shot OCR 매칭 성능을 사용해 방향 인식을 극대화합니다.
     """
     print("[CLIP] Loading CLIP model for automatic view classification...")
     from transformers import CLIPProcessor, CLIPModel
@@ -97,26 +98,69 @@ def classify_views_with_clip(views, device="cuda:0"):
 
     # 뷰 수에 맞게 방향 후보 제한
     directions = _HUNYUAN_ORDER[:len(views)]
-    prompts = [_CLIP_PROMPTS[d] for d in directions]
+    vis_prompts = [_CLIP_PROMPTS[d] for d in directions]
+    
+    # 방향별 상세 텍스트 라벨 키워드 후보 (OCR 매칭용)
+    label_candidates = {
+        "front":  ["front view", "full front view", "front"],
+        "back":   ["back view", "full back view", "back"],
+        "right":  ["right side view", "right view", "right side", "right"],
+        "left":   ["left side view", "left view", "left side", "left"],
+        "top":    ["top-down view", "top down view", "top view", "top"],
+        "bottom": ["bottom-up view", "bottom up view", "bottom view", "bottom"],
+    }
 
-    # 각 뷰에 대해 방향별 유사도 계산
-    scores = []  # shape: [num_views, num_directions]
+    # 모든 라벨용 프롬프트 리스트 생성
+    lbl_prompts = []
+    prompt_to_dir = {}
+    for d in directions:
+        for p in label_candidates[d]:
+            lbl_prompts.append(p)
+            prompt_to_dir[p] = d
+
+    scores = np.zeros((len(views), len(directions)))  # [num_views, num_directions]
     with torch.no_grad():
-        for view in views:
-            inputs = processor(
-                text=prompts,
+        for i, view in enumerate(views):
+            label_img = labels[i] if labels is not None else None
+            
+            # A. 비주얼 이미지 일괄 매칭
+            vis_inputs = processor(
+                text=vis_prompts,
                 images=view.convert("RGB"),
                 return_tensors="pt",
                 padding=True,
             )
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            logits = model(**inputs).logits_per_image[0].cpu().numpy()
-            scores.append(logits)
-
-    scores = np.array(scores)  # [num_views, num_directions]
+            vis_inputs = {k: v.to(device) for k, v in vis_inputs.items()}
+            # Shape: (num_directions,)
+            vis_scores = model(**vis_inputs).logits_per_image[0].cpu().numpy()
+            
+            # B. 라벨 이미지 일괄 매칭 (라벨 영역이 존재할 때만)
+            if label_img is not None:
+                lbl_inputs = processor(
+                    text=lbl_prompts,
+                    images=label_img.convert("RGB"),
+                    return_tensors="pt",
+                    padding=True,
+                )
+                lbl_inputs = {k: v.to(device) for k, v in lbl_inputs.items()}
+                # Shape: (total_lbl_prompts,)
+                lbl_logits = model(**lbl_inputs).logits_per_image[0].cpu().numpy()
+                
+                # 각 방향 후보별 최댓값 매칭
+                lbl_scores = np.zeros(len(directions))
+                for dir_idx, direction in enumerate(directions):
+                    indices = [idx for idx, p in enumerate(lbl_prompts) if prompt_to_dir[p] == direction]
+                    lbl_scores[dir_idx] = np.max(lbl_logits[indices])
+                
+                # 텍스트 정보가 매우 명확하므로 85%의 큰 가중치를 부여
+                combined = 0.85 * lbl_scores + 0.15 * vis_scores
+            else:
+                combined = vis_scores
+                
+            scores[i] = combined
 
     # Greedy 할당: 우선순위 순으로 최고 점수 뷰를 방향에 배정
-    assignment = {}  # direction -> PIL Image
+    assignment = {}
     used = set()
     for dir_idx, direction in enumerate(directions):
         candidates = [i for i in range(len(views)) if i not in used]
@@ -170,11 +214,12 @@ def run_multiview_pipeline(args):
 
     # 1. Slice turnaround sheet
     print(f"[*] Processing turnaround sheet: {args.sheet}")
-    views = slice_turnaround_sheet(
+    views, labels = slice_turnaround_sheet(
         args.sheet,
         num_views=args.num_views,
         bg_threshold=args.bg_threshold,
         use_rembg=args.use_rembg,
+        return_labels=True,
     )
     print(f"[+] Sliced {len(views)} views.")
 
@@ -188,8 +233,8 @@ def run_multiview_pipeline(args):
 
     # 2. 방향 정렬 (CLIP 자동 분류 또는 수동 순서 재배열)
     if args.auto_classify:
-        print("[*] Auto-classifying view directions with CLIP...")
-        views = classify_views_with_clip(views, device=args.device)
+        print("[*] Auto-classifying view directions with CLIP using label guiding...")
+        views = classify_views_with_clip(views, labels=labels, device=args.device)
         print(f"[+] CLIP classified {len(views)} views.")
     else:
         print(f"[*] Reordering views from '{args.view_order}' to Hunyuan3D order...")

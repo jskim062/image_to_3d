@@ -583,6 +583,29 @@ class TestMultiViewSystem(unittest.TestCase):
         self.assertEqual(back_pixel[2], 255) # Blue
         self.assertEqual(left_pixel[1], 255) # Green
 
+    def test_detect_label_split(self):
+        """Tests that detect_label_split correctly identifies a horizontal gap in a cell."""
+        from multiview_utils.image_utils import detect_label_split
+        
+        # Create an image of size 100x100
+        # White background, with an object in the top half (y: 10-60) and text label at the bottom (y: 85-95)
+        # Separated by a clear white gap around y: 65-80
+        img = Image.new("RGB", (100, 100), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        
+        # Draw object (red block)
+        draw.rectangle([10, 10, 90, 60], fill=(255, 0, 0))
+        
+        # Draw text label (black block)
+        draw.rectangle([30, 85, 70, 95], fill=(0, 0, 0))
+        
+        # Detect split point
+        split_y = detect_label_split(img, bg_threshold=240)
+        
+        # The split point should be within the white gap region (60 to 85)
+        self.assertIsNotNone(split_y)
+        self.assertTrue(60 < split_y < 85, f"Split point {split_y} is not in the expected gap region (60, 85)")
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -34,13 +34,60 @@ def remove_background_rembg(img, target_size=(512, 512)):
     return _center_and_pad(rgba, target_size)
 
 
+def detect_label_split(img, bg_threshold=240):
+    """
+    Analyzes the horizontal projection of non-white pixels to detect
+    if there is a text label at the bottom of the cell, separated by a white gap.
+    Returns split_y (int) if a label is detected, else None.
+    """
+    img_rgba = img.convert("RGBA")
+    data = np.array(img_rgba)
+    r, g, b, a = data[:, :, 0], data[:, :, 1], data[:, :, 2], data[:, :, 3]
+    
+    # Binary mask of non-white pixels
+    mask = (r < bg_threshold) | (g < bg_threshold) | (b < bg_threshold)
+    if "A" in img_rgba.mode:
+        mask = mask & (a > 10)
+        
+    H, W = mask.shape
+    
+    # Vertical profile: sum along columns
+    profile = np.sum(mask, axis=1)
+    
+    # We only look for a split in the bottom portion of the image (between 60% and 92% of height)
+    start_y = int(H * 0.60)
+    end_y = int(H * 0.92)
+    
+    best_gap_y = None
+    
+    # A valid gap row should have very low pixel density (e.g., < 1% of cell width)
+    max_gap_density = max(1, int(W * 0.01))
+    
+    # Scan for the best split point in the region
+    for y in range(start_y, end_y):
+        if profile[y] <= max_gap_density:
+            # Verify there is actual content above and below this row
+            content_above = np.any(profile[:y] > max_gap_density * 2)
+            content_below = np.any(profile[y+1:] > max_gap_density * 2)
+            
+            if content_above and content_below:
+                # Prefer gap closest to 80% height of the cell
+                if best_gap_y is None or abs(y - H * 0.80) < abs(best_gap_y - H * 0.80):
+                    best_gap_y = y
+                    
+    return best_gap_y
+
+
 def slice_turnaround_sheet(sheet_path, num_views=None, bg_threshold=240,
-                           target_size=(512, 512), use_rembg=False):
+                           target_size=(512, 512), use_rembg=False, return_labels=False):
     """
     Slices a turnaround sheet image into individual views.
     Supports both:
       1. Single-row layout (Aspect Ratio >= 3.5, e.g., 4 or 6 views side-by-side)
       2. 2-row grid layout (Aspect Ratio < 3.5, Row 1 = 4 horizontal views, Row 2 = 2 vertical views)
+      
+    If return_labels is True, returns (views, labels) where labels is a list of cropped
+    text label images (or None if no label detected for a view).
     """
     if not os.path.exists(sheet_path):
         raise FileNotFoundError(f"Turnaround sheet not found at: {sheet_path}")
@@ -50,14 +97,29 @@ def slice_turnaround_sheet(sheet_path, num_views=None, bg_threshold=240,
     aspect_ratio = width / height
     
     views = []
+    labels = []
 
     def _process(segment):
+        # Detect if there's a text label at the bottom
+        split_y = detect_label_split(segment, bg_threshold=bg_threshold)
+        if split_y is not None:
+            w, h = segment.size
+            object_segment = segment.crop((0, 0, w, split_y))
+            label_segment = segment.crop((0, split_y, w, h))
+            print(f"  [Label Detection] Detected text label! Splitting at y={split_y}")
+        else:
+            object_segment = segment
+            label_segment = None
+
         if use_rembg:
             try:
-                return remove_background_rembg(segment, target_size)
+                processed_view = remove_background_rembg(object_segment, target_size)
             except Exception as e:
                 print(f"  [rembg] 실패 ({e}), threshold 방식으로 대체합니다.")
-        return remove_background_and_center(segment, bg_threshold=bg_threshold, target_size=target_size)
+                processed_view = remove_background_and_center(object_segment, bg_threshold=bg_threshold, target_size=target_size)
+        else:
+            processed_view = remove_background_and_center(object_segment, bg_threshold=bg_threshold, target_size=target_size)
+        return processed_view, label_segment
 
     if use_rembg:
         print("[*] AI 배경 제거 모드 (rembg) 활성화")
@@ -75,14 +137,18 @@ def slice_turnaround_sheet(sheet_path, num_views=None, bg_threshold=240,
         for i in range(4):
             left = int(i * segment_width)
             right = int((i + 1) * segment_width)
-            views.append(_process(sheet.crop((left, 0, right, row_height))))
+            v, l = _process(sheet.crop((left, 0, right, row_height)))
+            views.append(v)
+            labels.append(l)
 
         print("[*] Slicing Row 2 into 2 vertical views (Top, Bottom)...")
         bottom_segment_width = width / 2
         for i in range(2):
             left = int(i * bottom_segment_width)
             right = int((i + 1) * bottom_segment_width)
-            views.append(_process(sheet.crop((left, row_height, right, height))))
+            v, l = _process(sheet.crop((left, row_height, right, height)))
+            views.append(v)
+            labels.append(l)
 
         print(f"[+] Successfully extracted 6 views from 2-row grid layout.")
     else:
@@ -101,8 +167,12 @@ def slice_turnaround_sheet(sheet_path, num_views=None, bg_threshold=240,
         for i in range(num_views):
             left = int(i * segment_width)
             right = width if i == num_views - 1 else int((i + 1) * segment_width)
-            views.append(_process(sheet.crop((left, 0, right, height))))
+            v, l = _process(sheet.crop((left, 0, right, height)))
+            views.append(v)
+            labels.append(l)
 
+    if return_labels:
+        return views, labels
     return views
 
 def remove_background_and_center(img, bg_threshold=240, target_size=(512, 512)):

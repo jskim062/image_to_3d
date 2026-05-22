@@ -56,45 +56,89 @@ from multiview_utils.multiview_paint_pipeline import MultiViewPaintPipeline
 # ---------------------------------------------------------------------------
 
 _CLIP_PROMPTS = {
-    "front":  "front view of an object or building, facing forward",
-    "back":   "back view of an object or building, rear side visible",
-    "right":  "right side profile view of an object or building",
-    "left":   "left side profile view of an object or building",
-    "top":    "top-down bird's eye view of an object or building from above",
-    "bottom": "bottom view of an object or building from below",
+    "front":  "front view of an object or building or character, front side, facing camera",
+    "back":   "back view of an object or building or character, rear side, facing away",
+    "right":  "right side profile view of an object or building or character",
+    "left":   "left side profile view of an object or building or character",
+    "top":    "top-down bird's eye view of an object or building or character from above",
+    "bottom": "bottom view of an object or building or character from below",
 }
 
 _HUNYUAN_ORDER = ["front", "right", "back", "left", "top", "bottom"]
 
-def classify_views_with_clip(views, device="cuda:0"):
+def classify_views_with_clip(views, labels=None, device="cuda:0"):
     """
     Classifies view directions automatically using CLIP and reorders them to Hunyuan3D camera sequence.
+    If text label images are present, uses zero-shot OCR matching to maximize accuracy.
     """
     print("[CLIP] Loading CLIP model for automatic view classification...")
     from transformers import CLIPProcessor, CLIPModel
     import numpy as np
+    import gc
 
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
     processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     model.eval()
 
     directions = _HUNYUAN_ORDER[:len(views)]
-    prompts = [_CLIP_PROMPTS[d] for d in directions]
+    vis_prompts = [_CLIP_PROMPTS[d] for d in directions]
+    
+    label_candidates = {
+        "front":  ["front view", "full front view", "front"],
+        "back":   ["back view", "full back view", "back"],
+        "right":  ["right side view", "right view", "right side", "right"],
+        "left":   ["left side view", "left view", "left side", "left"],
+        "top":    ["top-down view", "top down view", "top view", "top"],
+        "bottom": ["bottom-up view", "bottom up view", "bottom view", "bottom"],
+    }
 
-    scores = []
+    # 모든 라벨용 프롬프트 리스트 생성
+    lbl_prompts = []
+    prompt_to_dir = {}
+    for d in directions:
+        for p in label_candidates[d]:
+            lbl_prompts.append(p)
+            prompt_to_dir[p] = d
+
+    scores = np.zeros((len(views), len(directions)))
     with torch.no_grad():
-        for view in views:
-            inputs = processor(
-                text=prompts,
+        for i, view in enumerate(views):
+            label_img = labels[i] if labels is not None else None
+            
+            # A. Visual object matching score
+            vis_inputs = processor(
+                text=vis_prompts,
                 images=view.convert("RGB"),
                 return_tensors="pt",
                 padding=True,
             )
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            logits = model(**inputs).logits_per_image[0].cpu().numpy()
-            scores.append(logits)
-
-    scores = np.array(scores)
+            vis_inputs = {k: v.to(device) for k, v in vis_inputs.items()}
+            # Shape: (num_directions,)
+            vis_scores = model(**vis_inputs).logits_per_image[0].cpu().numpy()
+            
+            # B. Text label OCR matching score
+            if label_img is not None:
+                lbl_inputs = processor(
+                    text=lbl_prompts,
+                    images=label_img.convert("RGB"),
+                    return_tensors="pt",
+                    padding=True,
+                )
+                lbl_inputs = {k: v.to(device) for k, v in lbl_inputs.items()}
+                # Shape: (total_lbl_prompts,)
+                lbl_logits = model(**lbl_inputs).logits_per_image[0].cpu().numpy()
+                
+                # Extract max score for each direction
+                lbl_scores = np.zeros(len(directions))
+                for dir_idx, direction in enumerate(directions):
+                    indices = [idx for idx, p in enumerate(lbl_prompts) if prompt_to_dir[p] == direction]
+                    lbl_scores[dir_idx] = np.max(lbl_logits[indices])
+                
+                combined = 0.85 * lbl_scores + 0.15 * vis_scores
+            else:
+                combined = vis_scores
+                
+            scores[i] = combined
 
     assignment = {}
     used = set()
@@ -107,7 +151,6 @@ def classify_views_with_clip(views, device="cuda:0"):
               f"(score {scores[best_view_idx, dir_idx]:.2f})")
 
     del model
-    import gc
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -143,7 +186,12 @@ def run_multiview_pipeline(args):
     
     # 1. Slice and align turnaround sheet
     print(f"[*] Processing turnaround sheet: {args.sheet}")
-    views = slice_turnaround_sheet(args.sheet, num_views=args.num_views, bg_threshold=args.bg_threshold)
+    views, labels = slice_turnaround_sheet(
+        args.sheet,
+        num_views=args.num_views,
+        bg_threshold=args.bg_threshold,
+        return_labels=True,
+    )
     print(f"[+] Successfully sliced and standardized {len(views)} views.")
     
     # Save sliced views in their original sliced order for diagnostics
@@ -156,8 +204,8 @@ def run_multiview_pipeline(args):
     
     # Reorder views to match Hunyuan3D camera selection order: [Front, Right, Back, Left, (Top, Bottom)]
     if getattr(args, "auto_classify", False):
-        print("[*] Auto-classifying view directions with CLIP...")
-        views = classify_views_with_clip(views, device=args.device)
+        print("[*] Auto-classifying view directions with CLIP using label guiding...")
+        views = classify_views_with_clip(views, labels=labels, device=args.device)
         print(f"[+] CLIP classified {len(views)} views.")
     else:
         print(f"[*] Reordering views from '{args.view_order}' to match Hunyuan3D camera selection index mapping...")
