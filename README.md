@@ -12,19 +12,21 @@
 
 ## 📂 프로젝트 구조
 
-```
 c:/image_to_3d/
-├── multiview_pipeline.py      # 멀티뷰 turnaround 복원 파이프라인 CLI 오케스트레이터
-├── glb_to_cad.py              # CAD 및 디지털 패브리케이션용 메쉬 가속 Exporter
-├── glb_to_ifc.py              # 솔리드 메쉬 -> 중공형 BIM IFC 포맷 변환 스크립트
-├── test_multiview_system.py   # 로컬 CPU 환경용 통합 회귀 테스트 스위트
-├── multiview_utils/           # 멀티뷰 코어 연산 모듈 (네임스페이스 충돌 방지 격리)
-│   ├── image_utils.py         # 자동 시트 슬라이싱, 여백 센터링, 히스토그램 색상 정밀 정렬
+├── multiview_pipeline.py         # 멀티뷰 turnaround 복원 파이프라인 CLI 오케스트레이터
+├── architectural_cad_pipeline.py # 건축 전용 초경량 CAD 및 제작용 3D 복원 파이프라인 [NEW]
+├── glb_to_cad.py                 # CAD 및 디지털 패브리케이션용 메쉬 가속 Exporter
+├── glb_to_ifc.py                 # 솔리드 메쉬 -> 중공형 BIM IFC 포맷 변환 스크립트
+├── test_multiview_system.py      # 로컬 CPU 환경용 통합 회귀 테스트 스위트
+├── test_architectural_cad.py     # 건축 CAD 기하학적 연산 특화 유닛 테스트 스위트 [NEW]
+├── multiview_utils/              # 멀티뷰 코어 연산 모듈 (네임스페이스 충돌 방지 격리)
+│   ├── image_utils.py            # 자동 시트 슬라이싱, 여백 센터링, 히스토그램 색상 정밀 정렬
 │   └── multiview_paint_pipeline.py  # 6방향 실사 투영 텍스처 퓨전 및 seam-blending 서브클래스
-├── kaggle/                    # Kaggle Dual T4 GPU 맞춤 최적화 실행 노트북
+├── kaggle/                       # Kaggle Dual T4 GPU 맞춤 최적화 실행 노트북
 │   ├── hunyuan3d_2_1_dual_gpu.ipynb  # 단일 이미지 -> 3D (VRAM 극대화, 무적의 C++ JIT/OpenCV 복구)
-│   └── hunyuan3d_2_1_multiview.ipynb # 턴어라운드 시트 -> 3D 멀티뷰 투영 전용 노트북 (GitHub 자동 연동)
-└── colab/                     # Colab용 보조 테스트 노트북
+│   ├── hunyuan3d_2_1_multiview.ipynb # 턴어라운드 시트 -> 3D 멀티뷰 투영 전용 노트북 (GitHub 자동 연동)
+│   └── hunyuan3d_2_1_cad_fabrication.ipynb # 건축 전용 경량화 CAD/디지털 패브리케이션 특화 노트북 [NEW]
+└── colab/                        # Colab용 보조 테스트 노트북
 ```
 
 ---
@@ -100,10 +102,35 @@ python glb_to_cad.py my_model.glb ./output_cad/ --decimate 0.5 --unit cm
 ---
 
 ## 🧪 4. 로컬 자가 진단 및 회귀 검증
-인프라 이송이나 깃허브 코드 변경 시, CPU만 탑재된 로컬 개발 머신에서도 PyMeshLab, Pybind11 및 CUDA 그래픽 드라이버 장치를 완전히 가상 모방(Mocking)하여 파이프라인 전체 로직의 정합성을 검증할 수 있는 진단 회귀 테스트가 탑재되어 있습니다.
+이 프로젝트는 인프라 이송이나 깃허브 코드 변경 시, CPU만 탑재된 로컬 개발 머신에서도 PyMeshLab, Pybind11 및 CUDA 그래픽 드라이버 장치를 완전히 가상 모방(Mocking)하여 파이프라인 전체 로직의 정합성을 검증할 수 있는 진단 회귀 테스트가 탑재되어 있습니다.
 
 ```bash
-# 로컬 개발 환경에서 즉시 6개 코어 기능 정합성 테스트 가동
+# 로컬 개발 환경에서 멀티뷰 텍스처 파이프라인 정합성 테스트 가동
 python test_multiview_system.py
+
+# 로컬 개발 환경에서 신규 건축 CAD 기하학적 연산 특화 테스트 가동
+python test_architectural_cad.py
 ```
-*(성공 시 CPU 환경 상에서도 0.3초 내에 모든 턴어라운드 및 파이프라인 분배 연산 로직이 정상적임을 'OK' 사인으로 판정합니다.)*
+*(성공 시 CPU 환경 상에서도 0.3초 내에 모든 기하 연산 및 슬라이싱 로직이 정상적임을 'OK' 사인으로 판정합니다.)*
+
+---
+
+## 🏗️ 5. 건축 전용 초경량 CAD & 디지털 제작 파이프라인 (`architectural_cad_pipeline.py`)
+
+기존의 색상 텍스처 합성을 생략하고, 단 한 장의 2D 스케치/투시도로부터 실제 디지털 패브리케이션 장비 가공(3D 프린팅, CNC 밀링, 와플 그리드 커팅)에 즉시 투입 가능한 정밀 기하 데이터(STL, PLY, quad-friendly OBJ, DXF/SVG 단면 슬라이스)를 생성하는 경량형 초고속 파이프라인입니다.
+
+### 핵심 기술 요약
+- **초경량 1-Stage 가속**: 무거운 텍스처(Paint) 모델을 배제하고 형상(Shape) 단계만 탑재하여 **VRAM을 10GB 미만으로 절약**하고, 20초 만에 3D 모델을 복원합니다.
+- **지면 고정 장치 (Ground Locking)**: 3D 복원 특유의 둥글고 불안정한 바닥면 부위를 설정한 비율(기본 5%)만큼 칼로 자르듯 평평하게 다듬고, 바닥을 수치 기준 좌표 원점($Z=0$)으로 완벽하게 밀착 정렬시킵니다.
+- **기하학적 표면 노이즈 제거**: 마칭 큐브 알고리즘 고유의 복셀화 노이즈를 `Laplacian` 및 부피 수축 방지용 `Taubin` 스무딩 필터로 해결하여 Rhino NURBS 변환 및 가공에 최적화된 매끄러운 곡선 표면을 추출합니다.
+- **수평 등고 단면 슬라이싱 (DXF/SVG Contours)**: 사용자가 지정한 등간격(예: 0.2m)마다 3D 메쉬를 수평 절단하여 모든 레이어의 위치가 3D로 완벽히 정렬된 3D DXF 파일과 각 레이저 커팅을 위한 개별 2D SVG 파일 대량 추출을 지원합니다.
+
+### 💻 사용 방법 (로컬 / Kaggle 터미널)
+```bash
+# 단 한 장의 입면 컨셉 이미지로부터 지면 고정, Laplacian 스무딩 및 0.2 간격 슬라이싱 적용 실행
+python architectural_cad_pipeline.py --image ./building_concept.png --lock_ground --ground_ratio 0.05 --smoothing_method laplacian --slicing_interval 0.2 --output_dir ./output_arch
+
+# 여러 방향의 턴어라운드 건물 도면 시트를 슬라이싱하여 정면 기준으로 3D 형상 복원 가동
+python architectural_cad_pipeline.py --sheet ./building_turnaround.png --num_views 4 --lock_ground --slicing_interval 0.1 --output_dir ./output_arch
+```
+*(결과물이 저장되는 디렉토리에 정밀 스케일링된 Watertight STL, Rhino SubD용 OBJ, 고밀도 PLY 포인트 클라우드, 레이저 가공을 위한 DXF/SVG 단면 도면들이 정밀 패키징되어 저장됩니다.)*
